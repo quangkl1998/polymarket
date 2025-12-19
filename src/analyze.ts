@@ -739,12 +739,22 @@ function parseCSVLine(line: string): string[] {
  * Read all CSV files from a session directory and parse them
  */
 /**
- * Read all CSV files for a session from the new structure: data/wallets/<wallet>/<session-slug>.csv
+ * Extract market name from slug
+ * Example: "btc-updown-15m-1766147400" -> "btc"
+ */
+function extractMarketFromSlug(slug: string): string {
+  const match = slug.match(/^([^-]+)/);
+  return match ? match[1].toLowerCase() : "unknown";
+}
+
+/**
+ * Read all CSV files for a session from the new structure: data/wallets/<wallet>/<market>/<session-slug>.csv
  */
 export async function readSessionCSVFiles(
   sessionSlug: string
 ): Promise<OrderMatched[]> {
   const walletsDir = path.join(process.cwd(), "data", "wallets");
+  const market = extractMarketFromSlug(sessionSlug);
 
   try {
     // Check if wallets directory exists
@@ -760,8 +770,11 @@ export async function readSessionCSVFiles(
     const allOrders: OrderMatched[] = [];
     let filesRead = 0;
 
-    // For each wallet directory, look for the session CSV file
+    // For each wallet directory (named by wallet name, not address), look for the market subdirectory and session CSV file
     for (const walletDir of walletDirs) {
+      // Skip hidden files and metadata files
+      if (walletDir.startsWith(".")) continue;
+
       const walletPath = path.join(walletsDir, walletDir);
 
       try {
@@ -769,8 +782,17 @@ export async function readSessionCSVFiles(
         const stats = await fs.stat(walletPath);
         if (!stats.isDirectory()) continue;
 
-        // Look for the session CSV file
-        const csvFilePath = path.join(walletPath, `${sessionSlug}.csv`);
+        // Look for the market subdirectory
+        const marketPath = path.join(walletPath, market);
+        try {
+          await fs.access(marketPath);
+        } catch {
+          // Market directory doesn't exist for this wallet, skip
+          continue;
+        }
+
+        // Look for the session CSV file in the market directory
+        const csvFilePath = path.join(marketPath, `${sessionSlug}.csv`);
 
         try {
           await fs.access(csvFilePath);
@@ -818,7 +840,7 @@ export async function readSessionCSVFiles(
           }
           filesRead++;
         } catch {
-          // File doesn't exist for this wallet, skip
+          // File doesn't exist for this wallet/market, skip
           continue;
         }
       } catch (err) {
@@ -828,7 +850,7 @@ export async function readSessionCSVFiles(
     }
 
     console.log(
-      `✅ Loaded ${allOrders.length} orders from ${filesRead} CSV files (session: ${sessionSlug})`
+      `✅ Loaded ${allOrders.length} orders from ${filesRead} CSV files (session: ${sessionSlug}, market: ${market})`
     );
     return allOrders;
   } catch (err) {

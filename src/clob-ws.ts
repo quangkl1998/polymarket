@@ -97,17 +97,89 @@ const CSV_HEADER =
   "receivedAt,eventSlug,wallet,side,size,price,outcome,outcomeIndex,onChainTimestamp,transactionHash";
 
 /**
- * Get CSV file path for a session slug and wallet
- * Structure: data/wallets/<wallet>/<session-slug>.csv
+ * Extract market name from slug
+ * Example: "btc-updown-15m-1766147400" -> "btc"
+ *          "eth-updown-15m-1766147400" -> "eth"
  */
-function getCsvFilePath(eventSlug: string, wallet: string): string {
+function extractMarketFromSlug(slug: string): string {
+  // Extract the first part before the first dash (market name)
+  const match = slug.match(/^([^-]+)/);
+  return match ? match[1].toLowerCase() : "unknown";
+}
+
+/**
+ * Sanitize wallet name for use as folder name
+ * Remove invalid characters and replace with underscores
+ */
+function sanitizeFolderName(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9_-]/g, "_")
+    .replace(/_{2,}/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+/**
+ * Get wallet folder name from address or name map
+ */
+function getWalletFolderName(
+  wallet: string,
+  walletNameMap?: Map<string, string>
+): string {
+  const walletLower = wallet.toLowerCase();
+  const name = walletNameMap?.get(walletLower);
+  if (name) {
+    return sanitizeFolderName(name);
+  }
+  // Fallback to wallet address if no name provided
+  return walletLower;
+}
+
+/**
+ * Get CSV file path for a session slug and wallet
+ * Structure: data/wallets/<wallet-name>/<market>/<session-slug>.csv
+ * Example: data/wallets/Wallet_1/btc/btc-updown-15m-1766147400.csv
+ */
+function getCsvFilePath(
+  eventSlug: string,
+  wallet: string,
+  walletNameMap?: Map<string, string>
+): string {
+  const market = extractMarketFromSlug(eventSlug);
+  const walletFolder = getWalletFolderName(wallet, walletNameMap);
   return path.join(
     process.cwd(),
     "data",
     "wallets",
-    wallet.toLowerCase(),
+    walletFolder,
+    market,
     `${eventSlug}.csv`
   );
+}
+
+/**
+ * Save wallet address to name mapping in metadata file
+ */
+async function saveWalletMapping(
+  walletFolder: string,
+  walletAddress: string,
+  walletName?: string
+): Promise<void> {
+  const metadataFile = path.join(walletFolder, ".wallet.json");
+  const metadata = {
+    address: walletAddress,
+    name: walletName || walletAddress,
+    updatedAt: new Date().toISOString(),
+  };
+  try {
+    await fs.mkdir(walletFolder, { recursive: true });
+    await fs.writeFile(
+      metadataFile,
+      JSON.stringify(metadata, null, 2),
+      "utf-8"
+    );
+  } catch (err) {
+    console.error(`Failed to save wallet mapping: ${err}`);
+  }
 }
 
 /**
@@ -139,8 +211,13 @@ async function ensureCsvHeader(csvFile: string): Promise<boolean> {
  * Example slug: btc-updown-15m-1765785600
  * @param eventSlug - The event slug to subscribe to
  * @param wallets - Optional list of wallet addresses to filter. If provided, only trades from these wallets will be saved.
+ * @param walletNames - Optional Map of wallet addresses to custom names for display/logging
  */
-export function subscribeOrdersMatched(eventSlug: string, wallets?: string[]) {
+export function subscribeOrdersMatched(
+  eventSlug: string,
+  wallets?: string[],
+  walletNames?: Map<string, string> | string[]
+) {
   const ws = new WebSocket("wss://ws-live-data.polymarket.com/");
 
   // Track which wallets have had their CSV headers ensured
@@ -151,9 +228,34 @@ export function subscribeOrdersMatched(eventSlug: string, wallets?: string[]) {
     ? new Set(wallets.map((w) => w.toLowerCase()))
     : null;
 
+  // Create a Map for wallet names (lowercase key -> name)
+  const walletNameMap = new Map<string, string>();
+  if (walletNames) {
+    if (Array.isArray(walletNames)) {
+      // If array, use wallet as name
+      walletNames.forEach((w) => {
+        walletNameMap.set(w.toLowerCase(), w);
+      });
+    } else {
+      // If Map, use the provided names
+      walletNames.forEach((name, wallet) => {
+        walletNameMap.set(wallet.toLowerCase(), name);
+      });
+    }
+  }
+
+  // Helper to get wallet display name
+  const getWalletDisplayName = (wallet: string): string => {
+    const name = walletNameMap.get(wallet.toLowerCase());
+    return name ? `${name} (${wallet})` : wallet;
+  };
+
   if (allowedWallets) {
+    const walletList = Array.from(allowedWallets)
+      .map((w) => getWalletDisplayName(w))
+      .join(", ");
     console.log(
-      `🔍 Chỉ lưu giao dịch từ ${allowedWallets.size} ví được chỉ định`
+      `🔍 Chỉ lưu giao dịch từ ${allowedWallets.size} ví được chỉ định: ${walletList}`
     );
   }
 
@@ -170,8 +272,23 @@ export function subscribeOrdersMatched(eventSlug: string, wallets?: string[]) {
         return;
       }
 
+      // Get wallet folder name and save mapping
+      const walletFolderName = getWalletFolderName(wallet, walletNameMap);
+      const walletName = walletNameMap.get(wallet.toLowerCase());
+      const walletFolder = path.join(
+        process.cwd(),
+        "data",
+        "wallets",
+        walletFolderName
+      );
+
+      // Save wallet mapping metadata (only once per wallet)
+      if (!csvHeadersEnsured.has(wallet)) {
+        await saveWalletMapping(walletFolder, wallet, walletName);
+      }
+
       // Write to wallet-specific CSV file
-      const csvFile = getCsvFilePath(eventSlug, wallet);
+      const csvFile = getCsvFilePath(eventSlug, wallet, walletNameMap);
 
       // Ensure CSV header only once per wallet
       if (!csvHeadersEnsured.has(wallet)) {
@@ -231,12 +348,16 @@ export function subscribeOrdersMatched(eventSlug: string, wallets?: string[]) {
     if (!isOrdersMatched) return;
 
     // Persist all trades (automatically categorized by wallet)
+    const walletAddr = msg?.payload?.proxyWallet;
+    const walletDisplay = walletAddr
+      ? getWalletDisplayName(walletAddr)
+      : walletAddr || "unknown";
     console.log(
-      `💥 Order matched: ${msg?.payload?.proxyWallet} side: ${
-        msg?.payload?.side
-      } size: ${msg?.payload?.size} price: ${msg?.payload?.price.toFixed(
-        2
-      )} outcome: ${msg?.payload?.outcome} time: ${msg?.payload?.timestamp}`
+      `💥 Order matched: ${walletDisplay} side: ${msg?.payload?.side} size: ${
+        msg?.payload?.size
+      } price: ${msg?.payload?.price.toFixed(2)} outcome: ${
+        msg?.payload?.outcome
+      } time: ${msg?.payload?.timestamp}`
     );
     void persistMessage(msg);
   });
