@@ -97,10 +97,16 @@ const CSV_HEADER =
   "receivedAt,eventSlug,wallet,side,size,price,outcome,outcomeIndex,onChainTimestamp,transactionHash";
 
 /**
- * Get CSV file path for a session slug
+ * Get CSV file path for a session slug and wallet
  */
-function getCsvFilePath(eventSlug: string): string {
-  return path.join(process.cwd(), "data", "sessions", `${eventSlug}.csv`);
+function getCsvFilePath(eventSlug: string, wallet: string): string {
+  return path.join(
+    process.cwd(),
+    "data",
+    "sessions",
+    eventSlug,
+    `${wallet.toLowerCase()}.csv`
+  );
 }
 
 /**
@@ -128,35 +134,31 @@ async function ensureCsvHeader(csvFile: string): Promise<boolean> {
 
 /**
  * Subscribe to order matched feed for a given event slug.
+ * Automatically categorizes trades by wallet into separate CSV files per session.
  * Example slug: btc-updown-15m-1765785600
  * @param eventSlug - The event slug to subscribe to
- * @param walletToTrack - Optional wallet address to filter trades. If provided, only trades from this wallet will be persisted.
  */
-export function subscribeOrdersMatched(
-  eventSlug: string,
-  walletToTrack?: string
-) {
+export function subscribeOrdersMatched(eventSlug: string) {
   const ws = new WebSocket("wss://ws-live-data.polymarket.com/");
-  const ordersFile = path.join(process.cwd(), "data", "orders_matched.jsonl");
-  const csvFile = getCsvFilePath(eventSlug);
 
-  // Track if CSV header has been ensured
-  let csvHeaderEnsured = false;
+  // Track which wallets have had their CSV headers ensured
+  const csvHeadersEnsured = new Set<string>();
 
   const persistMessage = async (payload: unknown) => {
     try {
-      await fs.mkdir(path.dirname(ordersFile), { recursive: true });
       const normalized = normalizeOrdersMatched(payload);
-      if (!normalized) return;
+      if (!normalized || !normalized.wallet) return;
 
-      // Write to JSONL
-      await fs.appendFile(ordersFile, JSON.stringify(normalized) + "\n");
+      // Write to wallet-specific CSV file
+      const wallet = normalized.wallet.toLowerCase();
+      const csvFile = getCsvFilePath(eventSlug, wallet);
 
-      // Write to CSV (ensure header only once)
-      if (!csvHeaderEnsured) {
+      // Ensure CSV header only once per wallet
+      if (!csvHeadersEnsured.has(wallet)) {
         await ensureCsvHeader(csvFile);
-        csvHeaderEnsured = true;
+        csvHeadersEnsured.add(wallet);
       }
+
       const csvRow = toCsvRow(normalized);
       await fs.appendFile(csvFile, csvRow + "\n");
     } catch (err) {
@@ -188,7 +190,7 @@ export function subscribeOrdersMatched(
       return;
     }
 
-    let msg: unknown;
+    let msg: any;
     try {
       msg = JSON.parse(raw);
     } catch (err) {
@@ -208,20 +210,15 @@ export function subscribeOrdersMatched(
 
     if (!isOrdersMatched) return;
 
-    // If walletToTrack is provided, filter by wallet; otherwise persist all trades
-    if (walletToTrack) {
-      const matchesWallet =
-        obj?.payload?.proxyWallet?.toLowerCase() ===
-        walletToTrack.toLowerCase();
-      if (matchesWallet) {
-        console.log("💥 orders_matched", msg);
-        void persistMessage(msg);
-      }
-    } else {
-      // No wallet filter - persist all trades
-      console.log("💥 orders_matched", msg);
-      void persistMessage(msg);
-    }
+    // Persist all trades (automatically categorized by wallet)
+    console.log(
+      `💥 Order matched: ${msg?.payload?.proxyWallet} side: ${
+        msg?.payload?.side
+      } size: ${msg?.payload?.size} price: ${msg?.payload?.price.toFixed(
+        2
+      )} outcome: ${msg?.payload?.outcome} time: ${msg?.payload?.timestamp}`
+    );
+    void persistMessage(msg);
   });
 
   ws.on("close", () => {

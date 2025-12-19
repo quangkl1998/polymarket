@@ -34,6 +34,7 @@ data/sessions/*.csv
 # Keep directory structure but ignore contents
 !data/.gitkeep
 !data/sessions/.gitkeep
+data/*
 
 # Logs
 logs/

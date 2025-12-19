@@ -83,8 +83,7 @@ function isSessionActive(slug: string): boolean {
 
 async function main() {
   // ---- Config ----
-  const initialSlug = "btc-updown-15m-1766058300"; // TODO: change to current session
-  const walletToTrack = "0x6031B6eed1C97e853c6e0F03Ad3ce3529351F96d"; // TODO: change to wallet to track
+  const initialSlug = "btc-updown-15m-1766140200"; // TODO: change to current session
 
   // Determine current active session
   let currentSlug = initialSlug;
@@ -99,11 +98,9 @@ async function main() {
 
   let currentWebSocket: ReturnType<typeof subscribeOrdersMatched> | null = null;
 
-  const subscribeToSlug = (slug: string, wallet?: string) => {
+  const subscribeToSlug = (slug: string) => {
     console.log(
-      `🔄 Subscribing to session: ${slug}${
-        wallet ? ` (tracking wallet: ${wallet})` : " (tracking all wallets)"
-      }`
+      `🔄 Subscribing to session: ${slug} (auto-categorizing by wallet)`
     );
 
     // Close previous connection if exists
@@ -111,8 +108,8 @@ async function main() {
       currentWebSocket.close();
     }
 
-    // Subscribe to new slug with wallet filter
-    currentWebSocket = subscribeOrdersMatched(slug, wallet);
+    // Subscribe to new slug (automatically categorizes by wallet)
+    currentWebSocket = subscribeOrdersMatched(slug);
     return currentWebSocket;
   };
 
@@ -140,7 +137,7 @@ async function main() {
     setTimeout(() => {
       console.log(`\n🔄 Switching to next session: ${nextSlug}`);
       currentSlug = nextSlug;
-      subscribeToSlug(currentSlug, walletToTrack);
+      subscribeToSlug(currentSlug);
 
       // Schedule the next session switch
       scheduleNextSession();
@@ -162,7 +159,7 @@ async function main() {
   // }
 
   // ---- Subscribe realtime orders_matched ----
-  subscribeToSlug(currentSlug, walletToTrack);
+  subscribeToSlug(currentSlug);
 
   // Schedule automatic session updates
   scheduleNextSession();
