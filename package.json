@@ -29,8 +29,10 @@
   },
   "devDependencies": {
     "@types/ws": "^8.18.1",
+    "@types/xlsx": "^0.0.35",
     "ts-node": "^10.9.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "xlsx": "^0.18.5"
   },
   "engines": {
     "node": ">=18"

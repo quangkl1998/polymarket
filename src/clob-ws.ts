@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 import { promises as fs } from "fs";
 import path from "path";
+import * as XLSX from "xlsx";
 
 export function subscribeMarket(assetIds: string[]) {
   const ws = new WebSocket(
@@ -220,8 +221,14 @@ export function subscribeOrdersMatched(
 ) {
   const ws = new WebSocket("wss://ws-live-data.polymarket.com/");
 
-  // Track which wallets have had their CSV headers ensured
-  const csvHeadersEnsured = new Set<string>();
+  // Track which wallets have had their metadata saved
+  const walletsMetadataSaved = new Set<string>();
+
+  // Track which Excel sheets have been initialized (wallet + market + sessionSlug)
+  const excelSheetsInitialized = new Set<string>();
+
+  // Cache for Excel workbooks (wallet_market -> workbook)
+  const workbookCache = new Map<string, XLSX.WorkBook>();
 
   // Create a Set of allowed wallets (lowercase) for fast lookup
   const allowedWallets = wallets
@@ -283,21 +290,92 @@ export function subscribeOrdersMatched(
       );
 
       // Save wallet mapping metadata (only once per wallet)
-      if (!csvHeadersEnsured.has(wallet)) {
+      if (!walletsMetadataSaved.has(wallet)) {
         await saveWalletMapping(walletFolder, wallet, walletName);
+        walletsMetadataSaved.add(wallet);
       }
 
-      // Write to wallet-specific CSV file
-      const csvFile = getCsvFilePath(eventSlug, wallet, walletNameMap);
+      // Get market from event slug
+      const market = extractMarketFromSlug(eventSlug);
 
-      // Ensure CSV header only once per wallet
-      if (!csvHeadersEnsured.has(wallet)) {
-        await ensureCsvHeader(csvFile);
-        csvHeadersEnsured.add(wallet);
+      // Excel file path: data/wallets/{wallet-name}/{market}.xlsx
+      const excelFile = path.join(walletFolder, `${market}.xlsx`);
+      const cacheKey = `${wallet}_${market}`;
+      const sheetKey = `${wallet}_${market}_${eventSlug}`;
+
+      // Get or create workbook for this wallet + market
+      let workbook: XLSX.WorkBook;
+      if (workbookCache.has(cacheKey)) {
+        workbook = workbookCache.get(cacheKey)!;
+      } else {
+        // Try to load existing file
+        try {
+          await fs.access(excelFile);
+          workbook = XLSX.readFile(excelFile);
+        } catch {
+          // File doesn't exist, create new workbook
+          workbook = XLSX.utils.book_new();
+        }
+        workbookCache.set(cacheKey, workbook);
       }
 
-      const csvRow = toCsvRow(normalized);
-      await fs.appendFile(csvFile, csvRow + "\n");
+      // Prepare row data with wallet name
+      const rowData = {
+        receivedAt: normalized.receivedAt || "",
+        eventSlug: normalized.eventSlug || eventSlug,
+        wallet: normalized.wallet || wallet,
+        walletName: walletName || wallet,
+        walletAddress: wallet,
+        side: normalized.side || "",
+        size: normalized.size || "",
+        price: normalized.price || "",
+        outcome: normalized.outcome || "",
+        outcomeIndex: normalized.outcomeIndex || "",
+        onChainTimestamp: normalized.onChainTimestamp || "",
+        transactionHash: normalized.transactionHash || "",
+      };
+
+      // Get or create sheet for this session
+      // Sheet name format: btc-1766147400 (market-timestamp)
+      const sessionTimestamp = eventSlug.split("-").pop() || eventSlug;
+      const sheetName = `${market}-${sessionTimestamp}`
+        .substring(0, 31)
+        .replace(/[\\\/\?\*\[\]]/g, "_");
+      let worksheet: XLSX.WorkSheet;
+
+      if (workbook.SheetNames.includes(sheetName)) {
+        // Sheet exists, get it
+        worksheet = workbook.Sheets[sheetName];
+      } else {
+        // Create new sheet with header
+        const headers = [
+          "receivedAt",
+          "eventSlug",
+          "wallet",
+          "walletName",
+          "walletAddress",
+          "side",
+          "size",
+          "price",
+          "outcome",
+          "outcomeIndex",
+          "onChainTimestamp",
+          "transactionHash",
+        ];
+        worksheet = XLSX.utils.aoa_to_sheet([headers]);
+        XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
+        excelSheetsInitialized.add(sheetKey);
+      }
+
+      // Append row to sheet
+      XLSX.utils.sheet_add_json(worksheet, [rowData], {
+        origin: -1, // Append to end
+        skipHeader: true,
+      });
+
+      // Save workbook to file
+      // walletFolder already exists from metadata save
+      XLSX.writeFile(workbook, excelFile);
     } catch (err) {
       console.error("Failed to write orders_matched", err);
     }
