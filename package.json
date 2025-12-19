@@ -14,7 +14,8 @@
     "prepare": "npm run build",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "analyze": "ts-node src/analyze.ts"
+    "analyze": "ts-node src/analyze.ts",
+    "analyze-price": "ts-node src/analyze-price.ts"
   },
   "keywords": [
     "polymarket",
