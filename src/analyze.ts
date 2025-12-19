@@ -738,72 +738,101 @@ function parseCSVLine(line: string): string[] {
 /**
  * Read all CSV files from a session directory and parse them
  */
+/**
+ * Read all CSV files for a session from the new structure: data/wallets/<wallet>/<session-slug>.csv
+ */
 export async function readSessionCSVFiles(
   sessionSlug: string
 ): Promise<OrderMatched[]> {
-  const sessionDir = path.join(process.cwd(), "data", "sessions", sessionSlug);
+  const walletsDir = path.join(process.cwd(), "data", "wallets");
 
   try {
-    const files = await fs.readdir(sessionDir);
-    const csvFiles = files.filter((f) => f.endsWith(".csv"));
-
-    if (csvFiles.length === 0) {
-      console.log(`No CSV files found in ${sessionDir}`);
+    // Check if wallets directory exists
+    try {
+      await fs.access(walletsDir);
+    } catch {
+      console.log(`No wallets directory found: ${walletsDir}`);
       return [];
     }
 
+    // Get all wallet directories
+    const walletDirs = await fs.readdir(walletsDir);
     const allOrders: OrderMatched[] = [];
+    let filesRead = 0;
 
-    for (const csvFile of csvFiles) {
-      const filePath = path.join(sessionDir, csvFile);
-      const content = await fs.readFile(filePath, "utf-8");
-      const lines = content
-        .trim()
-        .split("\n")
-        .filter((line) => line.trim() && !line.startsWith("receivedAt")); // Skip header
+    // For each wallet directory, look for the session CSV file
+    for (const walletDir of walletDirs) {
+      const walletPath = path.join(walletsDir, walletDir);
 
-      for (const line of lines) {
+      try {
+        // Check if it's a directory
+        const stats = await fs.stat(walletPath);
+        if (!stats.isDirectory()) continue;
+
+        // Look for the session CSV file
+        const csvFilePath = path.join(walletPath, `${sessionSlug}.csv`);
+
         try {
-          const parts = parseCSVLine(line);
-          if (parts.length < 10) continue;
+          await fs.access(csvFilePath);
+          // File exists, read it
+          const content = await fs.readFile(csvFilePath, "utf-8");
+          const lines = content
+            .trim()
+            .split("\n")
+            .filter((line) => line.trim() && !line.startsWith("receivedAt")); // Skip header
 
-          // Parse CSV row: receivedAt,eventSlug,wallet,side,size,price,outcome,outcomeIndex,onChainTimestamp,transactionHash
-          const order: OrderMatched = {
-            receivedAt: parts[0]?.trim() || "",
-            eventSlug: parts[1]?.trim() || undefined,
-            wallet: parts[2]?.trim() || undefined,
-            side: (parts[3]?.trim() as "BUY" | "SELL") || undefined,
-            size: parseFloat(parts[4]?.trim() || "0") || undefined,
-            price: parseFloat(parts[5]?.trim() || "0") || undefined,
-            outcome: parts[6]?.trim() || undefined,
-            outcomeIndex: parseInt(parts[7]?.trim() || "0", 10) || undefined,
-            onChainTimestamp:
-              parseInt(parts[8]?.trim() || "0", 10) || undefined,
-            transactionHash: parts[9]?.trim() || undefined,
-          };
+          for (const line of lines) {
+            try {
+              const parts = parseCSVLine(line);
+              if (parts.length < 10) continue;
 
-          if (
-            order.price !== undefined &&
-            order.size !== undefined &&
-            order.price > 0
-          ) {
-            allOrders.push(order);
+              // Parse CSV row: receivedAt,eventSlug,wallet,side,size,price,outcome,outcomeIndex,onChainTimestamp,transactionHash
+              const order: OrderMatched = {
+                receivedAt: parts[0]?.trim() || "",
+                eventSlug: parts[1]?.trim() || undefined,
+                wallet: parts[2]?.trim() || undefined,
+                side: (parts[3]?.trim() as "BUY" | "SELL") || undefined,
+                size: parseFloat(parts[4]?.trim() || "0") || undefined,
+                price: parseFloat(parts[5]?.trim() || "0") || undefined,
+                outcome: parts[6]?.trim() || undefined,
+                outcomeIndex:
+                  parseInt(parts[7]?.trim() || "0", 10) || undefined,
+                onChainTimestamp:
+                  parseInt(parts[8]?.trim() || "0", 10) || undefined,
+                transactionHash: parts[9]?.trim() || undefined,
+              };
+
+              if (
+                order.price !== undefined &&
+                order.size !== undefined &&
+                order.price > 0
+              ) {
+                allOrders.push(order);
+              }
+            } catch (err) {
+              console.error(
+                `Failed to parse CSV line: ${line.substring(0, 100)}...`,
+                err
+              );
+            }
           }
-        } catch (err) {
-          console.error(
-            `Failed to parse CSV line: ${line.substring(0, 100)}...`,
-            err
-          );
+          filesRead++;
+        } catch {
+          // File doesn't exist for this wallet, skip
+          continue;
         }
+      } catch (err) {
+        // Skip if can't read directory
+        continue;
       }
     }
 
     console.log(
-      `✅ Loaded ${allOrders.length} orders from ${csvFiles.length} CSV files`
+      `✅ Loaded ${allOrders.length} orders from ${filesRead} CSV files (session: ${sessionSlug})`
     );
     return allOrders;
   } catch (err) {
-    console.error(`Failed to read session directory: ${sessionDir}`, err);
+    console.error(`Failed to read wallets directory: ${walletsDir}`, err);
     return [];
   }
 }

@@ -85,6 +85,14 @@ async function main() {
   // ---- Config ----
   const initialSlug = "btc-updown-15m-1766140200"; // TODO: change to current session
 
+  // Optional: List of wallets to track. If empty/undefined, track all wallets
+  // Example: ["0x123...", "0x456..."]
+  // const walletsToTrack: string[] | undefined = undefined;
+  const walletsToTrack = [
+    "0x6031b6eed1c97e853c6e0f03ad3ce3529351f96d",
+    "0x9de851c79a04376a356f22f7085d94d71795d837",
+  ];
+
   // Determine current active session
   let currentSlug = initialSlug;
   const parsed = parseSlug(initialSlug);
@@ -98,10 +106,14 @@ async function main() {
 
   let currentWebSocket: ReturnType<typeof subscribeOrdersMatched> | null = null;
 
-  const subscribeToSlug = (slug: string) => {
-    console.log(
-      `🔄 Subscribing to session: ${slug} (auto-categorizing by wallet)`
-    );
+  const subscribeToSlug = (slug: string, wallets?: string[]) => {
+    if (wallets && wallets.length > 0) {
+      console.log(
+        `🔄 Subscribing to session: ${slug} (chỉ lưu ${wallets.length} ví được chỉ định)`
+      );
+    } else {
+      console.log(`🔄 Subscribing to session: ${slug} (lưu tất cả ví)`);
+    }
 
     // Close previous connection if exists
     if (currentWebSocket) {
@@ -109,7 +121,7 @@ async function main() {
     }
 
     // Subscribe to new slug (automatically categorizes by wallet)
-    currentWebSocket = subscribeOrdersMatched(slug);
+    currentWebSocket = subscribeOrdersMatched(slug, wallets);
     return currentWebSocket;
   };
 
@@ -137,7 +149,7 @@ async function main() {
     setTimeout(() => {
       console.log(`\n🔄 Switching to next session: ${nextSlug}`);
       currentSlug = nextSlug;
-      subscribeToSlug(currentSlug);
+      subscribeToSlug(currentSlug, walletsToTrack);
 
       // Schedule the next session switch
       scheduleNextSession();
@@ -159,7 +171,7 @@ async function main() {
   // }
 
   // ---- Subscribe realtime orders_matched ----
-  subscribeToSlug(currentSlug);
+  subscribeToSlug(currentSlug, walletsToTrack);
 
   // Schedule automatic session updates
   scheduleNextSession();

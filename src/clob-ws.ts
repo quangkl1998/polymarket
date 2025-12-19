@@ -98,14 +98,15 @@ const CSV_HEADER =
 
 /**
  * Get CSV file path for a session slug and wallet
+ * Structure: data/wallets/<wallet>/<session-slug>.csv
  */
 function getCsvFilePath(eventSlug: string, wallet: string): string {
   return path.join(
     process.cwd(),
     "data",
-    "sessions",
-    eventSlug,
-    `${wallet.toLowerCase()}.csv`
+    "wallets",
+    wallet.toLowerCase(),
+    `${eventSlug}.csv`
   );
 }
 
@@ -137,20 +138,39 @@ async function ensureCsvHeader(csvFile: string): Promise<boolean> {
  * Automatically categorizes trades by wallet into separate CSV files per session.
  * Example slug: btc-updown-15m-1765785600
  * @param eventSlug - The event slug to subscribe to
+ * @param wallets - Optional list of wallet addresses to filter. If provided, only trades from these wallets will be saved.
  */
-export function subscribeOrdersMatched(eventSlug: string) {
+export function subscribeOrdersMatched(eventSlug: string, wallets?: string[]) {
   const ws = new WebSocket("wss://ws-live-data.polymarket.com/");
 
   // Track which wallets have had their CSV headers ensured
   const csvHeadersEnsured = new Set<string>();
+
+  // Create a Set of allowed wallets (lowercase) for fast lookup
+  const allowedWallets = wallets
+    ? new Set(wallets.map((w) => w.toLowerCase()))
+    : null;
+
+  if (allowedWallets) {
+    console.log(
+      `🔍 Chỉ lưu giao dịch từ ${allowedWallets.size} ví được chỉ định`
+    );
+  }
 
   const persistMessage = async (payload: unknown) => {
     try {
       const normalized = normalizeOrdersMatched(payload);
       if (!normalized || !normalized.wallet) return;
 
-      // Write to wallet-specific CSV file
       const wallet = normalized.wallet.toLowerCase();
+
+      // Filter by wallet list if provided
+      if (allowedWallets && !allowedWallets.has(wallet)) {
+        // Wallet not in the allowed list, skip
+        return;
+      }
+
+      // Write to wallet-specific CSV file
       const csvFile = getCsvFilePath(eventSlug, wallet);
 
       // Ensure CSV header only once per wallet
