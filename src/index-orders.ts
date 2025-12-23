@@ -1,12 +1,4 @@
-import {
-  getAssetIdsBySlug,
-  getConditionIdBySlug,
-  fetchTrades,
-  TradeItem,
-} from "./polymarket";
-import { subscribeMarket, subscribeOrdersMatched } from "./clob-ws";
-import { promises as fs } from "fs";
-import path from "path";
+import { subscribeOrdersMatched } from "./clob-ws";
 
 /**
  * Parse slug to extract base pattern and session timestamp
@@ -89,13 +81,14 @@ async function main() {
     "btc-updown-15m",
     "eth-updown-15m",
     "sol-updown-15m",
+    "xrp-updown-15m",
     // Add more base patterns here
   ];
 
   // Generate slugs with current session timestamp
   const initialSlugs = basePatterns.map((base) => getCurrentSessionSlug(base));
 
-  console.log("📅 Current session slugs:");
+  console.log("📅 Current session slugs (Orders Matched):");
   initialSlugs.forEach((slug, idx) => {
     console.log(`   ${idx + 1}. ${slug} (from base: ${basePatterns[idx]})`);
   });
@@ -106,10 +99,24 @@ async function main() {
   // Or use array format: ["0x123...", "0x456..."] (no names)
   // const walletsToTrack: Map<string, string> | undefined = undefined;
   const walletsToTrack = new Map<string, string>([
-    ["0x751a2b86cab503496efd325c8344e10159349ea1", "Wallet1"],
-    ["0x818f214c7f3e479cce1d964d53fe3db7297558cb", "Wallet2"],
-    ["0x1ff49fdcb6685c94059b65620f43a683be0ce7a5", "Wallet3"],
-    ["0xF6796F6516083FAEC41DA34E8c3d231a8EEb26b5", "Wallet4"],
+    ["0xecd55daa7c6900683b804d1d4db935fbfabe43f4", "15m-a4"],
+    [
+      "0x589222a5124a96765443b97a3498d89ffd824ad2",
+      "PurpleThunderBicycleMountain",
+    ],
+    ["0x63ce342161250d705dc0b16df89036c8e5f9ba9a", "0x8dxd"],
+    ["0x6f2628a8ac6e3f7bd857657d5316c33822ced136", "0x6f26"],
+    ["0x717415ddfb74c35208e24d2a90f5560c1921fe1b", "kal-kalich"],
+    ["0xe00740bce98a594e26861838885ab310ec3b548c", "distinct-baguette"],
+    ["0x751a2b86cab503496efd325c8344e10159349ea1", "Sharky6999"],
+    ["0xf247584e41117bbbe4cc06e4d2c95741792a5216", "0xf2475"],
+    ["0x1ff49fdcb6685c94059b65620f43a683be0ce7a5", "ca6859f3"],
+    ["0x818f214c7f3e479cce1d964d53fe3db7297558cb", "livebreathevolatility"],
+    ["0xa103eee98ac104a676c202d7afe5e859881c255c", "cccccccccccccc"],
+    ["0xd44e29936409019f93993de8bd603ef6cb1bb15e", "coffeemachine"],
+    ["0x080a53ccb5caf5949d2e67074e8629fe1f249da4", "ExpressoMartini"],
+    ["0x23cb796cf58bfa12352f0164f479deedbd50658e", "quepasamae"],
+    ["0x6031b6eed1c97e853c6e0f03ad3ce3529351f96d", "gabagool22"],
   ]);
   // Alternative: Simple array format (no names)
   // const walletsToTrack = [
@@ -122,8 +129,6 @@ async function main() {
     base: string;
     currentSlug: string;
     websocket: ReturnType<typeof subscribeOrdersMatched> | null;
-    marketWebsocket: ReturnType<typeof subscribeMarket> | null;
-    assetIds: string[] | null;
   }
 
   const slugStates: SlugState[] = [];
@@ -148,8 +153,6 @@ async function main() {
       base: parsed.base,
       currentSlug,
       websocket: null,
-      marketWebsocket: null,
-      assetIds: null,
     });
   }
 
@@ -158,7 +161,7 @@ async function main() {
     return;
   }
 
-  console.log(`\n📊 Tracking ${slugStates.length} slug(s):`);
+  console.log(`\n📊 Tracking ${slugStates.length} slug(s) for Orders Matched:`);
   slugStates.forEach((state) => {
     console.log(`   - ${state.currentSlug}`);
   });
@@ -193,65 +196,19 @@ async function main() {
         .map((w) => getWalletName(w, wallets))
         .join(", ");
       console.log(
-        `🔄 Subscribing to session: ${slug} (chỉ lưu ${walletList.length} ví: ${walletNames})`
+        `🔄 Subscribing to orders_matched for session: ${slug} (chỉ lưu ${walletList.length} ví: ${walletNames})`
       );
     } else {
-      console.log(`🔄 Subscribing to session: ${slug} (lưu tất cả ví)`);
+      console.log(
+        `🔄 Subscribing to orders_matched for session: ${slug} (lưu tất cả ví)`
+      );
     }
 
     // Subscribe to orders_matched (automatically categorizes by wallet)
     const ordersWs = subscribeOrdersMatched(slug, walletList, wallets);
 
-    // Subscribe to market data (orderbook, trades)
-    // Note: Market subscription is optional, continue even if it fails
     if (state) {
-      try {
-        // Get asset IDs for this slug
-        if (!state.assetIds) {
-          console.log(`📊 Fetching asset IDs for ${slug}...`);
-          try {
-            state.assetIds = await getAssetIdsBySlug(slug);
-            console.log(
-              `✅ Got ${state.assetIds.length} asset IDs for ${slug}`
-            );
-          } catch (err: any) {
-            // Market might not exist yet or API error
-            const errorMsg =
-              err?.response?.status === 404
-                ? "Market not found (404)"
-                : err?.message || "Unknown error";
-            console.warn(
-              `⚠️  Could not fetch asset IDs for ${slug}: ${errorMsg}. Skipping market subscription.`
-            );
-            state.assetIds = null; // Mark as failed so we don't retry
-            // Don't return early - continue to ensure ordersWs is returned
-          }
-        }
-
-        // Subscribe to market
-        if (state.assetIds && state.assetIds.length > 0) {
-          console.log(`📈 Subscribing to market data for ${slug}...`);
-          // Close existing market websocket if any
-          if (state.marketWebsocket) {
-            console.log(
-              `   Closing existing market websocket before subscribing to new one...`
-            );
-            state.marketWebsocket.close();
-            state.marketWebsocket = null;
-          }
-          state.marketWebsocket = subscribeMarket(state.assetIds, slug);
-          console.log(`   ✅ Market websocket created for ${slug}`);
-        } else {
-          console.log(
-            `⚠️  No asset IDs available for ${slug}, skipping market subscription`
-          );
-          // Ensure marketWebsocket is null if we're not subscribing
-          state.marketWebsocket = null;
-        }
-      } catch (err) {
-        console.error(`❌ Failed to subscribe market for ${slug}:`, err);
-        // Continue execution, don't crash
-      }
+      state.websocket = ordersWs;
     }
 
     return ordersWs;
@@ -296,23 +253,12 @@ async function main() {
           }
           state.websocket = null;
         }
-        if (state.marketWebsocket) {
-          console.log(`   Closing previous market websocket...`);
-          try {
-            state.marketWebsocket.close();
-          } catch (err) {
-            console.warn(`   Error closing market websocket:`, err);
-          }
-          state.marketWebsocket = null;
-        }
 
         // Wait a bit to ensure connections are closed
         await new Promise((resolve) => setTimeout(resolve, 500));
 
         // Subscribe to new session
         state.currentSlug = nextSlug;
-        // Reset assetIds to fetch new ones for new session
-        state.assetIds = null;
 
         console.log(`   Subscribing to new session: ${nextSlug}`);
         state.websocket = await subscribeToSlug(
@@ -330,13 +276,6 @@ async function main() {
           );
         }
 
-        // Verify market subscription
-        if (state.marketWebsocket) {
-          console.log(`   ✅ Market subscription active for ${nextSlug}`);
-        } else {
-          console.log(`   ⚠️  Market subscription not active for ${nextSlug}`);
-        }
-
         // Schedule the next session switch for this slug
         scheduleNextSession(state);
       } catch (err) {
@@ -350,8 +289,7 @@ async function main() {
     }, msUntilNext);
   };
 
-  // ---- Subscribe realtime orders_matched and market data for all slugs ----
-  // Note: API server runs as a separate process. Use "npm run api" to start it.
+  // ---- Subscribe realtime orders_matched for all slugs ----
   for (const state of slugStates) {
     state.websocket = await subscribeToSlug(
       state.currentSlug,
@@ -364,76 +302,3 @@ async function main() {
 }
 
 main().catch(console.error);
-
-async function appendTrades(
-  filePath: string,
-  trades: TradeItem[],
-  ctx: { slug: string }
-) {
-  if (!trades.length) return;
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-
-  const lines = trades.map((t) =>
-    JSON.stringify({
-      receivedAt: new Date().toISOString(),
-      eventSlug: ctx.slug,
-      wallet: t.proxyWallet,
-      side: t.side,
-      size: t.size,
-      price: t.price,
-      outcome: t.outcome,
-      outcomeIndex: t.outcomeIndex,
-      onChainTimestamp: t.timestamp,
-      transactionHash: t.transactionHash,
-      conditionId: t.conditionId,
-    })
-  );
-
-  await fs.appendFile(filePath, lines.join("\n") + "\n");
-}
-
-async function backfillAllTrades({
-  conditionId,
-  wallet,
-  pageSize,
-  filePath,
-  slug,
-}: {
-  conditionId?: string;
-  wallet?: string;
-  pageSize: number;
-  filePath: string;
-  slug: string;
-}) {
-  let offset = 0;
-  let total = 0;
-
-  console.log(
-    "backfillAllTrades",
-    conditionId,
-    wallet,
-    pageSize,
-    filePath,
-    slug
-  );
-
-  while (true) {
-    const batch = await fetchTrades({
-      conditionId,
-      wallet,
-      limit: pageSize,
-      offset,
-    });
-    console.log("batch", batch);
-
-    if (!batch.length) break;
-
-    await appendTrades(filePath, batch, { slug });
-    total += batch.length;
-    offset += pageSize;
-
-    if (batch.length < pageSize) break; // last page
-  }
-
-  return total;
-}

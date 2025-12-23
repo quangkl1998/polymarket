@@ -24,26 +24,49 @@ export async function getConditionIdBySlug(slug: string): Promise<string> {
 }
 
 /**
- * Get asset_ids (YES / NO) from market slug
+ * Get asset_ids (CLOB token IDs) from market slug using Gamma API
+ * Returns array with first clobTokenId: [clobTokenIds[0]]
  */
 export async function getAssetIdsBySlug(slug: string): Promise<string[]> {
-  const conditionId = await getConditionIdBySlug(slug);
+  try {
+    // Use Gamma API to get market data
+    const marketRes = await axios.get(
+      `https://gamma-api.polymarket.com/markets/slug/${slug}`
+    );
 
-  // 2. Get tokens (YES / NO)
-  const tokensRes = await axios.get(`${API_BASE}/tokens`, {
-    params: {
-      condition_id: conditionId,
-    },
-  });
+    const market = marketRes.data;
+    if (!market) {
+      throw new Error("Market not found in response");
+    }
 
-  if (!tokensRes.data || tokensRes.data.length === 0) {
-    throw new Error("No tokens found");
+    // Parse clobTokenIds from JSON string
+    let clobTokenIds: string[] = [];
+    if (market.clobTokenIds) {
+      if (typeof market.clobTokenIds === "string") {
+        // Parse JSON string
+        try {
+          clobTokenIds = JSON.parse(market.clobTokenIds);
+        } catch (err) {
+          console.warn("Failed to parse clobTokenIds:", err);
+        }
+      } else if (Array.isArray(market.clobTokenIds)) {
+        clobTokenIds = market.clobTokenIds;
+      }
+    }
+
+    if (clobTokenIds.length === 0) {
+      throw new Error("No clobTokenIds found in market response");
+    }
+
+    // Return array with first token ID: [clobTokenIds[0]]
+    return [clobTokenIds[0]];
+  } catch (err: any) {
+    const errorMsg =
+      err?.response?.status === 404
+        ? "Market not found (404)"
+        : err?.message || "Unknown error";
+    throw new Error(`Failed to get asset IDs for slug ${slug}: ${errorMsg}`);
   }
-
-  // Extract asset_id
-  const assetIds = tokensRes.data.map((t: any) => t.asset_id);
-
-  return assetIds;
 }
 
 type TradeSide = "BUY" | "SELL";
